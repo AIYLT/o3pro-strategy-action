@@ -1,14 +1,55 @@
 import os
 from typing import Dict, List
 
+# 演示模式配置
+DEMO_MODE = os.getenv("DEMO_MODE", "true").lower() == "true"  # 默认启用演示模式
+
 # API配置
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "your_polygon_api_key_here")
 
+# 检查是否为演示密钥
+IS_DEMO_OPENAI = OPENAI_API_KEY in ["your_openai_api_key_here", None, ""]
+IS_DEMO_POLYGON = POLYGON_API_KEY in ["your_polygon_api_key_here", None, ""]
+
 # o3模型配置 (严格按照文档要求)
 OPENAI_MODEL = "o3-2025-04-16"  # o3模型
-MODEL_VALIDATION_REQUIRED = True
+MODEL_VALIDATION_REQUIRED = not (IS_DEMO_OPENAI and DEMO_MODE)  # 演示模式下不强制验证
 TARGET_HIT_RATE = 80.0  # 目标命中率≥80%
+
+# 演示数据配置
+DEMO_DATA = {
+    "AAPL": {
+        "price": 175.43,
+        "volume": 45_123_456,
+        "change": 2.34,
+        "change_percent": 1.35,
+        "market_cap": 2_800_000_000_000,
+        "pe_ratio": 28.5,
+        "sector": "Technology",
+        "beta": 1.25
+    },
+    "NVDA": {
+        "price": 445.67,
+        "volume": 32_456_789,
+        "change": 15.23,
+        "change_percent": 3.54,
+        "market_cap": 1_100_000_000_000,
+        "pe_ratio": 65.2,
+        "sector": "Technology",
+        "beta": 1.68
+    },
+    "TSLA": {
+        "price": 248.91,
+        "volume": 78_234_567,
+        "change": -5.67,
+        "change_percent": -2.23,
+        "market_cap": 790_000_000_000,
+        "pe_ratio": 45.3,
+        "sector": "Consumer Discretionary",
+        "beta": 2.15
+    }
+}
 
 # Polygon Advanced API配置
 POLYGON_BASE_URL = "https://api.polygon.io"

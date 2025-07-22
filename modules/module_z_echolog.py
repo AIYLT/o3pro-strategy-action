@@ -523,4 +523,36 @@ class EchoLogEngine:
             },
             execution_time=execution_time,
             status="error"
-        ) 
+        )
+    
+    async def run_backtest(self, symbol: str, params: dict = None) -> dict:
+        """运行回测分析"""
+        try:
+            from config import DEMO_MODE, IS_DEMO_POLYGON
+            from demo_utils import get_demo_backtest_results, should_use_demo_mode
+            
+            # 演示模式
+            if should_use_demo_mode():
+                logger.info(f"💻 EchoLog演示模式回测: {symbol}")
+                return get_demo_backtest_results(symbol)
+            
+            # 实际回测逻辑
+            start_time = time.time()
+            result = await self.analyze(symbol)
+            
+            backtest_data = {
+                "symbol": symbol,
+                "period": "60天",
+                "confidence": result.confidence,
+                "status": result.status,
+                "execution_time": time.time() - start_time
+            }
+            
+            if result.status == "success":
+                backtest_data.update(result.data)
+            
+            return backtest_data
+            
+        except Exception as e:
+            logger.error(f"回测失败: {str(e)}")
+            return {"error": f"回测失败: {str(e)}", "symbol": symbol} 
