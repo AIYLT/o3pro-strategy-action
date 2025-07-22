@@ -1,37 +1,35 @@
-# 使用Python 3.11官方镜像
+# 使用官方 Python Slim 映像作為基底
 FROM python:3.11-slim
 
-# 安装必要的系统依赖（解决编译问题）
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    python3-dev \
-    python3-pip \
-    python3-venv \
-    libffi-dev \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# 设置工作目录
+# 設定工作目錄
 WORKDIR /app
 
-# 复制requirements.txt
-COPY requirements.txt /app/
+# 安裝必要的系統依賴（支援 pip 套件編譯）
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    libffi-dev \
+    gcc \
+    libssl-dev \
+    curl && \
+    rm -rf /var/lib/apt/lists/*
 
-# 创建虚拟环境并安装依赖
-RUN python -m venv /opt/venv
+# 建立虛擬環境
+RUN python3 -m venv /opt/venv
+
+# 將虛擬環境加入 PATH（取代 . activate）
 ENV PATH="/opt/venv/bin:$PATH"
+
+# 複製 requirements.txt
+COPY requirements.txt /app/requirements.txt
+
+# 升級 pip 並安裝套件
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-# 复制应用代码
-COPY . /app/
+# 複製其餘程式碼（確保 Docker cache 生效）
+COPY . /app
 
-# 设置环境变量
-ENV PYTHONPATH=/app
-ENV PATH="/opt/venv/bin:$PATH"
-
-# 暴露端口
-EXPOSE $PORT
-
-# 启动命令
+# Railway动态端口启动命令
 CMD uvicorn main:app --host 0.0.0.0 --port $PORT 
