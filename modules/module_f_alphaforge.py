@@ -10,8 +10,8 @@ import yfinance as yf
 import pandas as pd
 from typing import Dict, Any
 from datetime import datetime
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import MIN_MODULE_CONFIDENCE
+from utils import ModuleResult, TimeTracker, logger
+from config import CONFIDENCE_THRESHOLDS
 
 
 class AlphaForgeEngine:
@@ -20,7 +20,7 @@ class AlphaForgeEngine:
     def __init__(self):
         self.name = "AlphaForge"
         self.module_id = "F"
-        self.min_confidence = MIN_MODULE_CONFIDENCE['F']  # 60%
+        self.min_confidence = CONFIDENCE_THRESHOLDS['F']  # 60%
         
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> ModuleResult:
         """

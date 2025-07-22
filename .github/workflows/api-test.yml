@@ -1,0 +1,37 @@
+name: API Integration Test
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时运行一次
+  workflow_dispatch:  # 手动触发
+  push:
+    branches: [ master ]
+
+jobs:
+  api-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Test API Endpoints
+      run: |
+        # 测试分析API
+        curl -X POST "https://o3pro-strategy-action-production.up.railway.app/analyze" \
+          -H "Content-Type: application/json" \
+          -d '{"symbol": "AAPL", "portfolio_value": 100000, "risk_level": "moderate"}' \
+          --fail --silent --show-error
+        
+        # 测试市场扫描API  
+        curl -X POST "https://o3pro-strategy-action-production.up.railway.app/scan" \
+          -H "Content-Type: application/json" \
+          -d '{"market": "SP500"}' \
+          --fail --silent --show-error
+        
+        echo "✅ 智鉴富策略分析API测试通过"
+    
+    - name: Test Health Check
+      run: |
+        curl -f "https://o3pro-strategy-action-production.up.railway.app/" \
+          --silent --show-error
+        echo "✅ 健康检查通过" 

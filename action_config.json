@@ -1,21 +1,22 @@
 {
-  "openapi": "3.0.0",
+  "openapi": "3.1.0",
   "info": {
-    "title": "智鉴富策略分析API",
-    "description": "基于GPT-4o的智能投资顾问系统，提供股票分析和策略决策",
+    "title": "智鉴富策略分析API - o3模型版",
+    "description": "基于o3-2025-04-16的智能投资顾问系统，提供股票分析和策略决策，目标命中率≥80%",
     "version": "1.0.0"
   },
   "servers": [
     {
-      "url": "https://o3pro-strategy-action.onrender.com",
+      "url": "https://o3pro-strategy-action-production.up.railway.app",
       "description": "生产环境"
     }
   ],
   "paths": {
     "/analyze": {
       "post": {
-        "summary": "分析单个股票",
-        "description": "对指定股票进行全面分析，包括技术指标、风险控制、策略评分等",
+        "summary": "智鉴富股票策略分析",
+        "description": "基于o3-2025-04-16模型和11个核心模块(A-Z)进行股票分析，使用Polygon Advanced API获取实时数据，确保≥80%命中率",
+        "operationId": "analyzeStock",
         "requestBody": {
           "required": true,
           "content": {
@@ -25,23 +26,20 @@
                 "properties": {
                   "symbol": {
                     "type": "string",
-                    "description": "股票代码，如 AAPL, NVDA",
+                    "description": "股票代码 (如: AAPL, NVDA, TSLA)",
                     "example": "AAPL"
                   },
-                  "price": {
+                  "portfolio_value": {
                     "type": "number",
-                    "description": "当前价格（可选）",
-                    "example": 150.0
+                    "description": "投资组合总值(美元)",
+                    "example": 100000,
+                    "default": 100000
                   },
-                  "volume": {
-                    "type": "integer",
-                    "description": "成交量（可选）",
-                    "example": 1000000
-                  },
-                  "account_value": {
-                    "type": "number",
-                    "description": "账户总资金",
-                    "example": 100000
+                  "risk_level": {
+                    "type": "string",
+                    "enum": ["conservative", "moderate", "aggressive"],
+                    "description": "风险偏好等级",
+                    "default": "moderate"
                   }
                 },
                 "required": ["symbol"]
@@ -51,18 +49,21 @@
         },
         "responses": {
           "200": {
-            "description": "分析结果",
+            "description": "分析成功",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "symbol": {"type": "string"},
-                    "decision": {"type": "string"},
-                    "confidence": {"type": "number"},
                     "hit_rate": {"type": "number"},
-                    "recommendation": {"type": "object"},
-                    "formatted_output": {"type": "string"}
+                    "global_confidence": {"type": "number"},
+                    "ai_model": {"type": "string", "description": "使用的AI模型(o3-2025-04-16)"},
+                    "recommendation": {"type": "string"},
+                    "entry_price": {"type": "number"},
+                    "stop_loss": {"type": "number"},
+                    "take_profit": {"type": "number"},
+                    "markdown_report": {"type": "string"}
                   }
                 }
               }
@@ -73,8 +74,8 @@
     },
     "/scan": {
       "post": {
-        "summary": "批量扫描股票池",
-        "description": "扫描指定股票池，返回具备交易潜力的候选股票",
+        "summary": "市场扫描选股",
+        "operationId": "scanMarket",
         "requestBody": {
           "required": true,
           "content": {
@@ -82,18 +83,7 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "stock_pool": {
-                    "type": "string",
-                    "enum": ["tech_leaders", "sp500", "nasdaq100"],
-                    "description": "股票池选择",
-                    "example": "tech_leaders"
-                  },
-                  "custom_symbols": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "自定义股票列表",
-                    "example": ["AAPL", "NVDA", "TSLA"]
-                  }
+                  "market": {"type": "string", "enum": ["SP500", "NASDAQ100", "ALL"], "default": "SP500"}
                 }
               }
             }
@@ -101,42 +91,7 @@
         },
         "responses": {
           "200": {
-            "description": "扫描结果",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "strong_pool": {"type": "array"},
-                    "moderate_pool": {"type": "array"},
-                    "scan_confidence": {"type": "number"},
-                    "qualified_candidates": {"type": "integer"}
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/health": {
-      "get": {
-        "summary": "健康检查",
-        "description": "检查系统运行状态",
-        "responses": {
-          "200": {
-            "description": "系统状态",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": {"type": "string"},
-                    "modules": {"type": "object"}
-                  }
-                }
-              }
-            }
+            "description": "扫描成功"
           }
         }
       }

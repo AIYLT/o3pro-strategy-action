@@ -10,8 +10,8 @@ import pandas as pd
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import requests
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import POLYGON_API_KEY, POLYGON_BASE_URL
+from utils import ModuleResult, TimeTracker, logger
+from config import POLYGON_API_KEY, POLYGON_BASE_URL
 
 
 class ChronosEngine:

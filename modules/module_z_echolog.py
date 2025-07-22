@@ -10,8 +10,8 @@ import numpy as np
 from typing import Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 import yfinance as yf
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import MIN_WIN_RATE, MIN_PROFIT_RATIO, MAX_DRAWDOWN
+from utils import ModuleResult, TimeTracker, logger
+from config import BACKTEST_CONFIG, MIN_PROFIT_RATIO, RISK_CONFIG
 
 
 class EchoLogEngine:
@@ -20,9 +20,9 @@ class EchoLogEngine:
     def __init__(self):
         self.name = "EchoLog"
         self.module_id = "Z"
-        self.min_win_rate = MIN_WIN_RATE  # 65%
+        self.min_win_rate = BACKTEST_CONFIG  # 65%
         self.min_profit_ratio = MIN_PROFIT_RATIO  # 1.0
-        self.max_drawdown = MAX_DRAWDOWN  # 5%
+        self.max_drawdown = RISK_CONFIG  # 5%
         
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> ModuleResult:
         """

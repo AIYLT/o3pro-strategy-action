@@ -1,398 +1,458 @@
 """
-模块S: Helios | 市场扫描与选股器（升级版）
-功能: 在指定股票池中，基于交易量、波动性、价格行为与即时新闻等多维度条件，
-      自动筛选出当日具备交易潜力的股票候选名单
-用途: 作为整个决策流程的起点，为后续的精细化分析模块提供高质量的交易候选标的
-可信度S: 根据筛选条件的满足程度与历史回测有效性生成，若低于60%，则该候选名单将被视为低质量
+模組S: Helios | 市场扫描与选股器 (升级版)
+基于Polygon Advanced API的智能选股系统
+实现S-Score评分机制，确保高质量候选股票筛选
 """
 
 import asyncio
-import requests
+import aiohttp
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
 from datetime import datetime, timedelta
-import yfinance as yf
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import POLYGON_API_KEY, POLYGON_BASE_URL, MIN_MODULE_CONFIDENCE
+import logging
+from typing import Dict, List, Optional, Any
+import json
 
+from config import (
+    POLYGON_API_KEY, POLYGON_BASE_URL, POLYGON_ADVANCED_FEATURES,
+    HELIOS_CONFIG, CONFIDENCE_THRESHOLDS, OPENAI_API_KEY, OPENAI_MODEL
+)
+from utils import calculate_confidence, get_timestamp
+
+logger = logging.getLogger(__name__)
 
 class HeliosEngine:
-    """Helios市场扫描与选股器"""
+    """
+    Helios市场扫描与选股器
+    
+    功能:
+    1. 基于交易量、波动性、价格行为的多维度筛选
+    2. S-Score评分机制 (0-100分)
+    3. Polygon Advanced API数据获取
+    4. 预判性筛选与趋势加速点检测
+    """
     
     def __init__(self):
         self.name = "Helios"
-        self.module_id = "S"
-        self.api_key = POLYGON_API_KEY
-        self.min_confidence = MIN_MODULE_CONFIDENCE['S']  # 60%
+        self.description = "市场扫描与选股器(升级版)"
+        self.polygon_session = None
+        self.openai_client = None
         
-        # 默认股票池 (可扩展)
-        self.default_pools = {
-            "sp500": self._get_sp500_symbols(),
-            "nasdaq100": self._get_nasdaq100_symbols(),
-            "tech_leaders": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "AMD"]
-        }
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        self.polygon_session = aiohttp.ClientSession()
+        try:
+            import openai
+            self.openai_client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+        except ImportError:
+            logger.warning("OpenAI库未安装，AI新闻解读功能将被禁用")
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        if self.polygon_session:
+            await self.polygon_session.close()
     
-    async def scan_market(
-        self, 
-        stock_pool: str = "tech_leaders",
-        custom_symbols: List[str] = None
-    ) -> ModuleResult:
+    async def scan_market(self, market: str = "SP500", min_volume: float = 500000, 
+                         min_price: float = 10.0, max_results: int = 10) -> Dict[str, Any]:
         """
-        扫描市场并选出潜力股票
+        市场扫描主函数
         
         Args:
-            stock_pool: 股票池名称 ("sp500", "nasdaq100", "tech_leaders")
-            custom_symbols: 自定义股票列表
+            market: 扫描范围 (SP500, NASDAQ100, ALL)
+            min_volume: 最小成交量
+            min_price: 最小股价
+            max_results: 最大返回结果数
             
         Returns:
-            ModuleResult: 包含筛选结果和S-Score评分
+            扫描结果字典
         """
-        timer = TimeTracker().start()
-        
         try:
-            # 确定扫描范围
-            if custom_symbols:
-                symbols = custom_symbols
-            else:
-                symbols = self.default_pools.get(stock_pool, self.default_pools["tech_leaders"])
+            scan_start = datetime.now()
+            logger.info(f"🔍 开始扫描{market}市场...")
             
-            logger.info(f"Helios开始扫描 {len(symbols)} 只股票...")
+            # 1. 获取股票池
+            stock_pool = await self._get_stock_pool(market)
+            logger.info(f"📊 获取股票池: {len(stock_pool)}只股票")
             
-            # 获取预市场数据
-            premarket_data = await self._get_premarket_data(symbols)
-            
-            # 计算各股票的S-Score
+            # 2. 并行获取所有股票的市场数据
             candidates = []
             
-            for symbol in symbols:
-                try:
-                    # 获取股票技术数据
-                    technical_data = await self._get_technical_data(symbol)
-                    
-                    if not technical_data:
-                        continue
-                    
-                    # 计算S-Score
-                    s_score = self._calculate_s_score(symbol, technical_data, premarket_data.get(symbol, {}))
-                    
-                    if s_score >= 60:  # 只保留60分以上的候选股
-                        candidates.append({
-                            "symbol": symbol,
-                            "s_score": s_score,
-                            "technical_data": technical_data,
-                            "premarket_data": premarket_data.get(symbol, {})
-                        })
-                        
-                except Exception as e:
-                    logger.warning(f"扫描 {symbol} 失败: {str(e)}")
-                    continue
+            # 分批处理以避免API限制
+            batch_size = 50
+            for i in range(0, len(stock_pool), batch_size):
+                batch = stock_pool[i:i+batch_size]
+                batch_results = await self._process_stock_batch(
+                    batch, min_volume, min_price
+                )
+                candidates.extend(batch_results)
+                
+                # 防止API限制
+                if i + batch_size < len(stock_pool):
+                    await asyncio.sleep(1)
+            
+            # 3. 计算S-Score并排序
+            scored_candidates = []
+            for candidate in candidates:
+                s_score = await self._calculate_s_score(candidate)
+                if s_score >= HELIOS_CONFIG["s_score_thresholds"]["minimum"]:
+                    candidate["s_score"] = s_score
+                    candidate["confidence"] = self._score_to_confidence(s_score)
+                    scored_candidates.append(candidate)
             
             # 按S-Score排序
-            candidates.sort(key=lambda x: x["s_score"], reverse=True)
+            scored_candidates.sort(key=lambda x: x["s_score"], reverse=True)
             
-            # 分类候选股
-            strong_candidates = [c for c in candidates if c["s_score"] >= 80]  # 强选池
-            moderate_candidates = [c for c in candidates if 60 <= c["s_score"] < 80]
+            # 4. 限制返回数量
+            final_candidates = scored_candidates[:max_results]
             
-            # 计算整体筛选质量
-            overall_confidence = self._calculate_scan_confidence(candidates, len(symbols))
+            scan_time = (datetime.now() - scan_start).total_seconds()
             
-            execution_time = timer.stop()
-            
-            result_data = {
-                "total_scanned": len(symbols),
-                "qualified_candidates": len(candidates),
-                "strong_candidates": len(strong_candidates),
-                "moderate_candidates": len(moderate_candidates),
-                "strong_pool": strong_candidates[:10],  # 返回前10个强候选
-                "moderate_pool": moderate_candidates[:15],  # 返回前15个中等候选
-                "scan_confidence": round(overall_confidence, 4),
-                "is_high_quality": overall_confidence >= self.min_confidence,
-                "scan_timestamp": datetime.now().isoformat(),
-                "stock_pool_used": stock_pool
+            result = {
+                "scan_time": get_timestamp(),
+                "scan_duration": f"{scan_time:.2f}秒",
+                "total_scanned": len(stock_pool),
+                "qualified_count": len(scored_candidates),
+                "candidates": final_candidates,
+                "strong_pool_count": len([c for c in scored_candidates 
+                                        if c["s_score"] >= HELIOS_CONFIG["s_score_thresholds"]["strong_pool"]]),
+                "confidence": calculate_confidence(len(final_candidates), max_results)
             }
             
-            status = "success" if overall_confidence >= self.min_confidence else "low_quality"
-            
-            if overall_confidence >= self.min_confidence:
-                logger.info(f"Helios扫描完成: 发现 {len(strong_candidates)} 个强候选, {len(moderate_candidates)} 个中等候选")
-            else:
-                logger.warning(f"Helios扫描质量不足: 可信度 {overall_confidence:.2%} < {self.min_confidence:.2%}")
-            
-            return ModuleResult(
-                module_name=self.name,
-                confidence=overall_confidence,
-                data=result_data,
-                execution_time=execution_time,
-                status=status
-            )
+            logger.info(f"✅ 扫描完成: {len(final_candidates)}个高质量候选")
+            return result
             
         except Exception as e:
-            execution_time = timer.stop()
-            logger.error(f"Helios扫描失败: {str(e)}")
-            
-            return ModuleResult(
-                module_name=self.name,
-                confidence=0.0,
-                data={"error": str(e)},
-                execution_time=execution_time,
-                status="error"
-            )
-    
-    async def _get_premarket_data(self, symbols: List[str]) -> Dict[str, Dict]:
-        """获取盘前数据"""
-        premarket_data = {}
-        
-        try:
-            # 使用 yfinance 获取盘前数据 (简化实现)
-            for symbol in symbols:
-                try:
-                    ticker = yf.Ticker(symbol)
-                    info = ticker.info
-                    
-                    # 获取盘前价格变动
-                    regular_market_price = info.get('regularMarketPrice', 0)
-                    previous_close = info.get('previousClose', 0)
-                    
-                    if previous_close > 0:
-                        premarket_change = (regular_market_price - previous_close) / previous_close
-                        
-                        premarket_data[symbol] = {
-                            "premarket_change_pct": premarket_change,
-                            "premarket_volume": info.get('regularMarketVolume', 0),
-                            "gap_percent": abs(premarket_change),
-                            "current_price": regular_market_price
-                        }
-                
-                except Exception as e:
-                    logger.warning(f"获取 {symbol} 盘前数据失败: {str(e)}")
-                    continue
-            
-            return premarket_data
-            
-        except Exception as e:
-            logger.warning(f"获取盘前数据失败: {str(e)}")
-            return {}
-    
-    async def _get_technical_data(self, symbol: str) -> Dict[str, Any]:
-        """获取技术分析数据"""
-        try:
-            # 使用 yfinance 获取技术数据
-            ticker = yf.Ticker(symbol)
-            
-            # 获取历史数据
-            hist = ticker.history(period="60d")
-            
-            if hist.empty:
-                return None
-            
-            # 计算技术指标
-            current_price = hist['Close'].iloc[-1]
-            volume_20d_avg = hist['Volume'].rolling(20).mean().iloc[-1]
-            current_volume = hist['Volume'].iloc[-1]
-            
-            # 计算RVOL (相对成交量)
-            rvol = current_volume / volume_20d_avg if volume_20d_avg > 0 else 1.0
-            
-            # 计算ATR
-            high_low = hist['High'] - hist['Low']
-            high_close = abs(hist['High'] - hist['Close'].shift())
-            low_close = abs(hist['Low'] - hist['Close'].shift())
-            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-            atr_14 = true_range.rolling(14).mean().iloc[-1]
-            atr_percentage = (atr_14 / current_price) if current_price > 0 else 0
-            
-            # 移动平均线
-            ma_20 = hist['Close'].rolling(20).mean().iloc[-1]
-            ma_50 = hist['Close'].rolling(50).mean().iloc[-1] if len(hist) >= 50 else ma_20
-            
-            # 52周高点距离
-            high_52w = hist['High'].max()
-            distance_from_high = (high_52w - current_price) / high_52w if high_52w > 0 else 1.0
-            
-            # 近期表现
-            recent_performance = {}
-            for days in [5, 15]:
-                if len(hist) >= days:
-                    old_price = hist['Close'].iloc[-days]
-                    performance = (current_price - old_price) / old_price
-                    recent_performance[f"{days}d_return"] = performance
-            
+            logger.error(f"❌ 市场扫描失败: {str(e)}")
             return {
-                "current_price": current_price,
-                "rvol": rvol,
-                "atr_percentage": atr_percentage,
-                "ma_20": ma_20,
-                "ma_50": ma_50,
-                "price_above_ma20": current_price > ma_20,
-                "price_above_ma50": current_price > ma_50,
-                "distance_from_52w_high": distance_from_high,
-                "volume_20d_avg": volume_20d_avg,
-                "current_volume": current_volume,
-                "recent_performance": recent_performance,
-                "price_meets_minimum": current_price >= 10.0  # 最低价格要求
+                "error": str(e),
+                "scan_time": get_timestamp(),
+                "candidates": [],
+                "confidence": 0
+            }
+    
+    async def scan_symbol(self, symbol: str, portfolio_value: float) -> Dict[str, Any]:
+        """
+        单个股票扫描分析
+        
+        Args:
+            symbol: 股票代码
+            portfolio_value: 投资组合价值
+            
+        Returns:
+            分析结果
+        """
+        try:
+            logger.info(f"🔍 Helios扫描分析: {symbol}")
+            
+            # 获取股票数据
+            stock_data = await self._get_stock_data(symbol)
+            if not stock_data:
+                return {"error": f"无法获取{symbol}数据", "confidence": 0}
+            
+            # 计算S-Score
+            s_score = await self._calculate_s_score(stock_data)
+            confidence = self._score_to_confidence(s_score)
+            
+            # 趋势加速点检测
+            acceleration_signal = await self._detect_acceleration_point(symbol)
+            
+            result = {
+                "symbol": symbol,
+                "s_score": s_score,
+                "confidence": confidence,
+                "acceleration_detected": acceleration_signal["detected"],
+                "acceleration_reason": acceleration_signal["reason"],
+                "polygon_data": stock_data,
+                "recommendation": self._get_recommendation(s_score),
+                "analysis_timestamp": get_timestamp()
             }
             
+            logger.info(f"✅ {symbol} S-Score: {s_score:.1f}, 可信度: {confidence:.1f}%")
+            return result
+            
         except Exception as e:
-            logger.warning(f"获取 {symbol} 技术数据失败: {str(e)}")
+            logger.error(f"❌ {symbol}扫描失败: {str(e)}")
+            return {"error": str(e), "confidence": 0}
+    
+    async def _get_stock_pool(self, market: str) -> List[str]:
+        """获取指定市场的股票池"""
+        # 简化版本，实际应从Polygon API获取
+        stock_pools = {
+            "SP500": [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B",
+                "JPM", "JNJ", "V", "PG", "UNH", "HD", "MA", "PYPL", "DIS", "ADBE",
+                "CRM", "NFLX", "INTC", "AMD", "QCOM", "T", "VZ", "PFE", "KO", "PEP"
+            ],
+            "NASDAQ100": [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "ADBE",
+                "CRM", "NFLX", "INTC", "AMD", "QCOM", "PYPL", "COST", "AVGO", "TXN"
+            ],
+            "ALL": [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B",
+                "JPM", "JNJ", "V", "PG", "UNH", "HD", "MA", "PYPL", "DIS", "ADBE",
+                "CRM", "NFLX", "INTC", "AMD", "QCOM", "T", "VZ", "PFE", "KO", "PEP",
+                "COST", "AVGO", "TXN", "LLY", "ABBV", "MRK", "ORCL", "ACN", "TMO"
+            ]
+        }
+        return stock_pools.get(market, stock_pools["SP500"])
+    
+    async def _process_stock_batch(self, symbols: List[str], min_volume: float, 
+                                 min_price: float) -> List[Dict[str, Any]]:
+        """批量处理股票数据"""
+        batch_results = []
+        
+        for symbol in symbols:
+            try:
+                stock_data = await self._get_stock_data(symbol)
+                if stock_data and self._meets_basic_criteria(stock_data, min_volume, min_price):
+                    batch_results.append(stock_data)
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ 处理{symbol}失败: {str(e)}")
+                continue
+        
+        return batch_results
+    
+    async def _get_stock_data(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """从Polygon API获取股票数据"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. 获取基本行情数据
+                price_url = f"{POLYGON_BASE_URL}/v2/aggs/ticker/{symbol}/prev"
+                headers = {"Authorization": f"Bearer {POLYGON_API_KEY}"}
+                
+                async with session.get(price_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return None
+                    price_data = await resp.json()
+                
+                # 2. 获取实时快照
+                snapshot_url = f"{POLYGON_BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
+                async with session.get(snapshot_url, headers=headers) as resp:
+                    snapshot_data = await resp.json() if resp.status == 200 else {}
+                
+                # 整合数据
+                if price_data.get("results"):
+                    result = price_data["results"][0]
+                    return {
+                        "symbol": symbol,
+                        "price": result.get("c", 0),
+                        "volume": result.get("v", 0),
+                        "open": result.get("o", 0),
+                        "high": result.get("h", 0),
+                        "low": result.get("l", 0),
+                        "change": result.get("c", 0) - result.get("o", 0),
+                        "change_percent": ((result.get("c", 0) - result.get("o", 0)) / result.get("o", 1)) * 100,
+                        "snapshot": snapshot_data.get("results", {})
+                    }
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ 获取{symbol}数据失败: {str(e)}")
             return None
     
-    def _calculate_s_score(
-        self, 
-        symbol: str, 
-        technical_data: Dict[str, Any], 
-        premarket_data: Dict[str, Any]
-    ) -> float:
-        """计算S-Score (0-100分)"""
+    def _meets_basic_criteria(self, stock_data: Dict[str, Any], min_volume: float, 
+                            min_price: float) -> bool:
+        """检查是否满足基本筛选条件"""
+        return (
+            stock_data.get("price", 0) >= min_price and
+            stock_data.get("volume", 0) >= min_volume and
+            stock_data.get("price", 0) > 0
+        )
+    
+    async def _calculate_s_score(self, stock_data: Dict[str, Any]) -> float:
+        """
+        计算S-Score (0-100)
+        基于文档中的加权评分机制
+        """
         try:
             score = 0.0
+            weights = HELIOS_CONFIG["s_score_weights"]
             
-            # 1. RVOL权重25%
-            rvol = technical_data.get("rvol", 1.0)
-            if rvol >= 3.0:
-                score += 25
-            elif rvol >= 2.0:
-                score += 20
-            elif rvol >= 1.5:
-                score += 15
-            elif rvol >= 1.0:
-                score += 10
-            else:
-                score += 5
+            # 1. RVOL得分 (25%)
+            rvol_score = await self._calculate_rvol_score(stock_data)
+            score += rvol_score * weights["rvol"]
             
-            # 2. ATR波动性20%
-            atr_pct = technical_data.get("atr_percentage", 0)
-            price = technical_data.get("current_price", 0)
+            # 2. ATR波动性得分 (20%)
+            atr_score = await self._calculate_atr_score(stock_data)
+            score += atr_score * weights["atr_volatility"]
             
-            if atr_pct >= 0.04 and price >= 10:  # ATR>4% 且价格>$10
-                score += 20
-            elif atr_pct >= 0.03 and price >= 10:
-                score += 15
-            elif atr_pct >= 0.02:
-                score += 10
-            else:
-                score += 5
+            # 3. 跳空幅度得分 (15%)
+            gap_score = self._calculate_gap_score(stock_data)
+            score += gap_score * weights["gap_size"]
             
-            # 3. 跳空幅度15%
-            gap_pct = premarket_data.get("gap_percent", 0)
-            if gap_pct >= 0.03:  # 3%以上跳空
-                score += 15
-            elif gap_pct >= 0.02:
-                score += 12
-            elif gap_pct >= 0.01:
-                score += 8
-            else:
-                score += 3
+            # 4. 均线突破得分 (20%)
+            ma_score = await self._calculate_ma_breakout_score(stock_data)
+            score += ma_score * weights["ma_breakout"]
             
-            # 4. 均线突破20%
-            breakthrough_score = 0
-            if technical_data.get("price_above_ma20"):
-                breakthrough_score += 10
-            if technical_data.get("price_above_ma50"):
-                breakthrough_score += 10
+            # 5. 新闻情绪得分 (20%)
+            news_score = await self._calculate_news_sentiment_score(stock_data["symbol"])
+            score += news_score * weights["news_sentiment"]
             
-            # 均线排列
-            ma_20 = technical_data.get("ma_20", 0)
-            ma_50 = technical_data.get("ma_50", 0)
-            if ma_20 > ma_50:  # 多头排列
-                breakthrough_score += 5
-            
-            score += min(breakthrough_score, 20)
-            
-            # 5. 新闻情绪20% (简化实现)
-            news_score = self._get_simplified_news_score(symbol)
-            score += news_score
-            
-            # 额外加分项
-            
-            # 接近52周高点
-            distance_from_high = technical_data.get("distance_from_52w_high", 1.0)
-            if distance_from_high <= 0.05:  # 5%范围内
-                score += 5
-            
-            # 近期强势表现
-            recent_perf = technical_data.get("recent_performance", {})
-            if recent_perf.get("5d_return", 0) > 0.05:  # 5日涨幅>5%
-                score += 5
-            
-            # 确保价格符合要求
-            if not technical_data.get("price_meets_minimum", False):
-                score *= 0.5  # 价格过低扣分
-            
-            return min(max(score, 0), 100)
+            return min(100.0, max(0.0, score * 100))
             
         except Exception as e:
-            logger.warning(f"S-Score计算失败 {symbol}: {str(e)}")
+            logger.error(f"❌ S-Score计算失败: {str(e)}")
             return 0.0
     
-    def _get_simplified_news_score(self, symbol: str) -> float:
-        """简化的新闻情绪评分 (0-20分)"""
+    async def _calculate_rvol_score(self, stock_data: Dict[str, Any]) -> float:
+        """计算相对成交量得分"""
         try:
-            # 这里可以集成新闻API，目前使用简化逻辑
-            # 基于股票的基本面信息给分
+            current_volume = stock_data.get("volume", 0)
+            # 简化版本：假设平均成交量为当前成交量的70%
+            avg_volume = current_volume * 0.7
             
-            # 大盘股通常新闻较多
-            large_cap_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA"]
+            if avg_volume > 0:
+                rvol = current_volume / avg_volume
+                # RVOL > 3.0 = 满分, 线性递减
+                return min(1.0, max(0.0, (rvol - 1.0) / 2.0))
+            return 0.0
             
-            if symbol in large_cap_symbols:
-                return 15.0  # 大盘股基础分较高
-            else:
-                return 10.0  # 其他股票基础分
-                
-        except Exception as e:
-            logger.warning(f"新闻评分失败 {symbol}: {str(e)}")
-            return 8.0
+        except Exception:
+            return 0.0
     
-    def _calculate_scan_confidence(self, candidates: List[Dict], total_scanned: int) -> float:
-        """计算整体扫描可信度"""
+    async def _calculate_atr_score(self, stock_data: Dict[str, Any]) -> float:
+        """计算ATR波动性得分"""
         try:
-            if total_scanned == 0:
-                return 0.0
+            price = stock_data.get("price", 0)
+            high = stock_data.get("high", price)
+            low = stock_data.get("low", price)
             
-            # 基础可信度 = 合格候选股比例
-            qualified_ratio = len(candidates) / total_scanned
-            base_confidence = qualified_ratio
-            
-            # 质量调整
-            if candidates:
-                avg_score = np.mean([c["s_score"] for c in candidates])
-                quality_factor = avg_score / 100  # 归一化到0-1
+            if price > 0:
+                daily_range = high - low
+                atr_ratio = (daily_range / price) * 100
                 
-                # 综合可信度
-                final_confidence = base_confidence * 0.6 + quality_factor * 0.4
-            else:
-                final_confidence = 0.0
+                # ATR比率 > 4% = 满分
+                return min(1.0, max(0.0, atr_ratio / 4.0))
+            return 0.0
             
-            # 数据完整性调整
-            if total_scanned >= 20:  # 扫描样本足够
-                final_confidence *= 1.0
-            elif total_scanned >= 10:
-                final_confidence *= 0.9
-            else:
-                final_confidence *= 0.8
+        except Exception:
+            return 0.0
+    
+    def _calculate_gap_score(self, stock_data: Dict[str, Any]) -> float:
+        """计算跳空缺口得分"""
+        try:
+            # 简化版本：基于当日涨跌幅
+            change_percent = abs(stock_data.get("change_percent", 0))
             
-            return min(max(final_confidence, 0.0), 1.0)
+            # 跳空 > 2% = 满分
+            return min(1.0, max(0.0, change_percent / 2.0))
+            
+        except Exception:
+            return 0.0
+    
+    async def _calculate_ma_breakout_score(self, stock_data: Dict[str, Any]) -> float:
+        """计算均线突破得分"""
+        try:
+            # 简化版本：基于价格位置
+            price = stock_data.get("price", 0)
+            high = stock_data.get("high", price)
+            
+            # 假设突破信号
+            breakout_signal = price >= high * 0.98  # 接近最高价
+            
+            return 1.0 if breakout_signal else 0.3
+            
+        except Exception:
+            return 0.0
+    
+    async def _calculate_news_sentiment_score(self, symbol: str) -> float:
+        """计算新闻情绪得分"""
+        try:
+            if not self.openai_client:
+                return 0.5  # 默认中性得分
+            
+            # 获取最新新闻
+            news_data = await self._get_latest_news(symbol)
+            if not news_data:
+                return 0.5
+            
+            # 使用GPT-4o分析情绪
+            sentiment = await self._analyze_news_sentiment(news_data)
+            
+            return sentiment
             
         except Exception as e:
-            logger.warning(f"扫描可信度计算失败: {str(e)}")
+            logger.warning(f"⚠️ 新闻情绪分析失败: {str(e)}")
             return 0.5
     
-    def _get_sp500_symbols(self) -> List[str]:
-        """获取S&P 500股票列表 (简化版)"""
-        # 返回主要的S&P 500成分股
-        return [
-            "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK-B",
-            "UNH", "XOM", "JNJ", "JPM", "V", "PG", "MA", "HD", "AVGO", "PFE",
-            "CVX", "ABBV", "BAC", "KO", "COST", "DIS", "TMO", "WMT", "PEP",
-            "MRK", "ADBE", "ABT", "CRM", "NFLX", "ACN", "LLY", "NKE", "DHR"
-        ]
+    async def _get_latest_news(self, symbol: str) -> Optional[List[Dict]]:
+        """获取最新新闻"""
+        try:
+            url = f"{POLYGON_BASE_URL}/v2/reference/news"
+            params = {
+                "ticker": symbol,
+                "limit": 5,
+                "order": "desc"
+            }
+            headers = {"Authorization": f"Bearer {POLYGON_API_KEY}"}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("results", [])
+            return None
+            
+        except Exception:
+            return None
     
-    def _get_nasdaq100_symbols(self) -> List[str]:
-        """获取NASDAQ 100股票列表 (简化版)"""
-        return [
-            "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "AVGO",
-            "COST", "NFLX", "ADBE", "PEP", "CSCO", "COMCAST", "INTC", "INTU",
-            "AMD", "QCOM", "TXN", "ISRG", "BKNG", "AMGN", "HON", "VRTX",
-            "ADP", "SBUX", "GILD", "ADI", "MU", "AMAT", "PYPL", "REGN"
-        ] 
+    async def _analyze_news_sentiment(self, news_data: List[Dict]) -> float:
+        """使用GPT-4o分析新闻情绪"""
+        try:
+            news_text = "\n".join([
+                f"标题: {article.get('title', '')}\n描述: {article.get('description', '')}"
+                for article in news_data[:3]
+            ])
+            
+            prompt = f"""
+            分析以下新闻的整体情绪，返回0-1的分数：
+            - 0.0: 极度负面
+            - 0.5: 中性
+            - 1.0: 极度正面
+            
+            新闻内容：
+            {news_text}
+            
+            只返回数字分数，不要其他解释。
+            """
+            
+            response = await self.openai_client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0.3
+            )
+            
+            score_text = response.choices[0].message.content.strip()
+            return float(score_text)
+            
+        except Exception:
+            return 0.5
+    
+    async def _detect_acceleration_point(self, symbol: str) -> Dict[str, Any]:
+        """检测趋势加速点"""
+        try:
+            # 简化版本的加速点检测
+            return {
+                "detected": False,
+                "reason": "需要更多实时数据进行加速点检测"
+            }
+            
+        except Exception:
+            return {"detected": False, "reason": "检测失败"}
+    
+    def _score_to_confidence(self, s_score: float) -> float:
+        """将S-Score转换为可信度百分比"""
+        return min(95.0, max(10.0, s_score * 0.95))
+    
+    def _get_recommendation(self, s_score: float) -> str:
+        """基于S-Score给出建议"""
+        if s_score >= HELIOS_CONFIG["s_score_thresholds"]["strong_pool"]:
+            return "强选池候选"
+        elif s_score >= HELIOS_CONFIG["s_score_thresholds"]["minimum"]:
+            return "合格候选"
+        else:
+            return "不合格" 

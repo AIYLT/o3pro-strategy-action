@@ -11,10 +11,10 @@ import pandas as pd
 from typing import Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 import requests
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import (
-    POLYGON_API_KEY, POLYGON_BASE_URL, MIN_MODULE_CONFIDENCE,
-    MAX_POSITION_RISK, MAX_DRAWDOWN
+from utils import ModuleResult, TimeTracker, logger
+from config import (
+    POLYGON_API_KEY, POLYGON_BASE_URL, CONFIDENCE_THRESHOLDS,
+    RISK_CONFIG, RISK_CONFIG
 )
 
 
@@ -25,8 +25,8 @@ class AegisEngine:
         self.name = "Aegis"
         self.module_id = "C"
         self.api_key = POLYGON_API_KEY
-        self.min_confidence = MIN_MODULE_CONFIDENCE['C']  # 75%
-        self.max_position_risk = MAX_POSITION_RISK  # 3%
+        self.min_confidence = CONFIDENCE_THRESHOLDS['C']  # 75%
+        self.max_position_risk = RISK_CONFIG  # 3%
         
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> ModuleResult:
         """

@@ -11,8 +11,8 @@ import pandas as pd
 from typing import Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 import requests
-from ..utils import ModuleResult, TimeTracker, logger
-from ..config import POLYGON_API_KEY, POLYGON_BASE_URL, MIN_MODULE_CONFIDENCE
+from utils import ModuleResult, TimeTracker, logger
+from config import POLYGON_API_KEY, POLYGON_BASE_URL, CONFIDENCE_THRESHOLDS
 
 
 class MinervaEngine:
@@ -22,7 +22,7 @@ class MinervaEngine:
         self.name = "Minerva"
         self.module_id = "B"
         self.api_key = POLYGON_API_KEY
-        self.min_confidence = MIN_MODULE_CONFIDENCE['B']  # 70%
+        self.min_confidence = CONFIDENCE_THRESHOLDS['B']  # 70%
         
     async def analyze(self, symbol: str, data: Dict[str, Any]) -> ModuleResult:
         """

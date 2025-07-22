@@ -11,7 +11,7 @@ import json
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 import yfinance as yf
-from ..utils import ModuleResult, TimeTracker, logger
+from utils import ModuleResult, TimeTracker, logger
 
 
 class HermesEngine:

@@ -10,7 +10,7 @@ import yfinance as yf
 import pandas as pd
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
-from ..utils import ModuleResult, TimeTracker, logger
+from utils import ModuleResult, TimeTracker, logger
 
 
 class CerberusEngine:
