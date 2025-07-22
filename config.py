@@ -46,6 +46,17 @@ MODULE_PRIORITY = {
 CONFIDENCE_THRESHOLDS = {
     "global_minimum": 75.0,    # 全局最低可信度
     "hit_rate_minimum": 80.0,  # 最低命中率要求
+    "A": 70.0,  # Chronos
+    "B": 70.0,  # Minerva  
+    "C": 75.0,  # Aegis
+    "D": 60.0,  # Fenrir
+    "E": 50.0,  # Hermes
+    "F": 60.0,  # AlphaForge
+    "G": 65.0,  # TerraFilter
+    "S": 60.0,  # Helios
+    "X": 70.0,  # Cerberus
+    "Y": 80.0,  # Oracle
+    "Z": 65.0,  # EchoLog
     "module_minimum": {
         "A": 70.0,  # Chronos
         "B": 70.0,  # Minerva  
@@ -89,6 +100,9 @@ RISK_CONFIG = {
     "atr_multiplier": 1.5,
     "var_confidence": 95.0
 }
+
+# 盈亏比配置
+MIN_PROFIT_RATIO = 1.0  # 最小盈亏比要求
 
 # 回测配置
 BACKTEST_CONFIG = {

@@ -39,15 +39,38 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="智鑑富專屬智能投資顧問",
     description="基于GPT-4o的AI日內交易決策分析師，目标命中率≥80%",
-    version="1.0.0"
+    version="1.0.0",
+    servers=[
+        {
+            "url": "https://o3pro-strategy-action-production.up.railway.app",
+            "description": "生产环境"
+        },
+        {
+            "url": "http://localhost:8000",
+            "description": "本地开发环境"
+        },
+        {
+            "url": "https://localhost:8000",
+            "description": "本地HTTPS环境"
+        }
+    ]
 )
 
-# 添加CORS中间件
+# 添加CORS中间件 - 支持本地开发
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000", 
+        "http://127.0.0.1:8000",
+        "https://localhost:3000",
+        "https://localhost:8000",
+        "https://127.0.0.1:8000",
+        "https://o3pro-strategy-action-production.up.railway.app",
+        "*"  # 开发阶段允许所有域名
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -82,13 +105,12 @@ engines = {
     "Z": EchoLogEngine(),     # 模擬與回測器
 }
 
-@app.on_startup
 async def startup_event():
     """启动时验证系统配置"""
     try:
         # 验证GPT-4o模型
         if MODEL_VALIDATION_REQUIRED:
-            is_valid = await validate_model_version(OPENAI_MODEL)
+            is_valid = validate_model_version(OPENAI_MODEL, OPENAI_MODEL)
             if not is_valid:
                 logger.error(f"❌ 模型验证失败: {OPENAI_MODEL}")
                 raise Exception("Model validation failed")

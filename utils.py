@@ -52,6 +52,16 @@ def calculate_confidence_score(modules_confidence: Dict[str, float], module_prio
     
     return round(weighted_sum / total_weight if total_weight > 0 else 0.0, 4)
 
+def calculate_confidence(value1, value2=None) -> float:
+    """简化的信心度计算函数 - 兼容性包装"""
+    if value2 is None:
+        return min(value1 / 100.0, 1.0) if isinstance(value1, (int, float)) else 0.8
+    return min(value1 / value2, 1.0) if value2 > 0 else 0.8
+
+def track_time():
+    """创建时间追踪器"""
+    return TimeTracker()
+
 def format_price(price: float) -> str:
     """格式化价格显示"""
     return f"${price:.2f}"
