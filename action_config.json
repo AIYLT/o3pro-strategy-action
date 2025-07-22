@@ -1,0 +1,145 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "智鉴富策略分析API",
+    "description": "基于GPT-4o的智能投资顾问系统，提供股票分析和策略决策",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://o3pro-strategy-action.onrender.com",
+      "description": "生产环境"
+    }
+  ],
+  "paths": {
+    "/analyze": {
+      "post": {
+        "summary": "分析单个股票",
+        "description": "对指定股票进行全面分析，包括技术指标、风险控制、策略评分等",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "description": "股票代码，如 AAPL, NVDA",
+                    "example": "AAPL"
+                  },
+                  "price": {
+                    "type": "number",
+                    "description": "当前价格（可选）",
+                    "example": 150.0
+                  },
+                  "volume": {
+                    "type": "integer",
+                    "description": "成交量（可选）",
+                    "example": 1000000
+                  },
+                  "account_value": {
+                    "type": "number",
+                    "description": "账户总资金",
+                    "example": 100000
+                  }
+                },
+                "required": ["symbol"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "分析结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "symbol": {"type": "string"},
+                    "decision": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "hit_rate": {"type": "number"},
+                    "recommendation": {"type": "object"},
+                    "formatted_output": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scan": {
+      "post": {
+        "summary": "批量扫描股票池",
+        "description": "扫描指定股票池，返回具备交易潜力的候选股票",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stock_pool": {
+                    "type": "string",
+                    "enum": ["tech_leaders", "sp500", "nasdaq100"],
+                    "description": "股票池选择",
+                    "example": "tech_leaders"
+                  },
+                  "custom_symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "自定义股票列表",
+                    "example": ["AAPL", "NVDA", "TSLA"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "扫描结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "strong_pool": {"type": "array"},
+                    "moderate_pool": {"type": "array"},
+                    "scan_confidence": {"type": "number"},
+                    "qualified_candidates": {"type": "integer"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "健康检查",
+        "description": "检查系统运行状态",
+        "responses": {
+          "200": {
+            "description": "系统状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {"type": "string"},
+                    "modules": {"type": "object"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} 
